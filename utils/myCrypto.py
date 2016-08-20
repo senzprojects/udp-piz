@@ -50,7 +50,7 @@ class myCrypto:
       #Set the public and private key locations
       self.pubKeyLoc=keyspath+"/."+name+"_rsa.pub"
       self.privKeyLoc=keyspath+"/."+name+"_rsa"
-      print self.privKeyLoc
+      #print self.privKeyLoc
 
   def generateAES(self,pin):
     '''

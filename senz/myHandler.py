@@ -32,7 +32,12 @@ import thread
 import os.path
 lib_path = os.path.abspath('../utils')
 sys.path.append(lib_path)
+lib_path = os.path.abspath('../drivers')
+sys.path.append(lib_path)
 from myCrypto import *
+from myDriver import *
+from myCamDriver import *
+
 from senz import *
 
 
@@ -73,79 +78,73 @@ class myHandler(DatagramProtocol):
         return state
 
     def sendDatagram(self, senze):
-        global device
-        cry = myCrypto(name=device)
+        cry = myCrypto(name=self.device)
         senze = cry.signSENZE(senze)
         print(senze)
-        self.transport.write(senze)
+        self.tp.write(senze)
 
     #Senze response should be built as follows by calling the functions in the driver class
     def sendDataSenze(self,sensors,data,recipient):
-       global device
-       global aesKeys
-
-       response='DATA'
-       driver=myDriver()
-       cry=myCrypto(device)         
-
-       for sensor in sensors:
-           #If temperature is requested
-           if "tp" == sensor:
-              response ='%s #tp %s' %(response,driver.readTp())
-
-           #If AES key is requested
-	   if "key" == sensor:
-             aeskey=""         
-             #Generate AES Key
-             if cry.generateAES(driver.readTime()):
-                aeskey=cry.key
-                #Save AES key
-                aesKeys[recipient]=aeskey
-                #AES key is encrypted by the recipient public key
-                rep=myCrypto(recipient)
-                encKey=rep.encryptRSA(b64encode(aeskey))
+        response='DATA'
+        driver=myDriver()
+        cry=myCrypto(self.device)
+        for sensor in sensors:
+            #If temperature is requested
+            if "tp" == sensor:
+                response ='%s #tp %s' %(response,driver.readTp())
+            #If AES key is requested
+            elif "key" == sensor:
+                aeskey=""
+                #Generate AES Key
+                if cry.generateAES(driver.readTime()):
+                    aeskey=cry.key
+                    #Save AES key
+                    aesKeys[recipient]=aeskey
+                    #AES key is encrypted by the recipient public key
+                    rep=myCrypto(recipient)
+                    encKey=rep.encryptRSA(b64encode(aeskey))
                 response ='%s #key %s' %(response,encKey)
 
-           #If photo is requested
-           elif "photo" == sensor:
-              cam=myCamDriver()
-              cam.takePhoto()
-              photo=cam.readPhotob64()
-              response ='%s #photo %s' %(response,photo)
+            #If photo is requested
+            elif "photo" == sensor:
+                cam=myCamDriver()
+                cam.takePhoto()
+                photo=cam.readPhotob64()
+                response ='%s #photo %s' %(response,photo)
 
-           #If time is requested
-           elif "time" == sensor:
-              response ='%s #time %s' %(response,driver.readTime())
+            #If time is requested
+            elif "time" == sensor:
+                response ='%s #time %s' %(response,driver.readTime())
 
-           #If gps is requested 
-           elif "gps" == sensor:
-              #if AES key is available, gps data will be encrypted
-              gpsData='%s' %(driver.readGPS())
-              if recipient in aesKeys:
-                 rep=myCrypto(recipient)
-                 rep.key=aesKeys[recipient]
-                 gpsData=rep.encrypt(gpsData)
-              response ='%s #gps %s' %(response,gpsData)
+            #If gps is requested
+            elif "gps" == sensor:
+                #if AES key is available, gps data will be encrypted
+                gpsData='%s' %(driver.readGPS())
+                if recipient in aesKeys:
+                    rep=myCrypto(recipient)
+                    rep.key=aesKeys[recipient]
+                    gpsData=rep.encrypt(gpsData)
+                response ='%s #gps %s' %(response,gpsData)
 
-           #If gpio is requested 
-           elif "gpio" in sensor:
-              m=re.search(r'\d+$',sensor)
-              pinnumber=int(m.group())
-              print pinnumber
-              response ='%s #gpio%s %s' %(response,pinnumber,driver.readGPIO(port=pinnumber))
-           else:
-              response ='%s #%s NULL' %(response,sensor)
+            #If gpio is requested
+            elif "gpio" in sensor:
+                m=re.search(r'\d+$',sensor)
+                pinnumber=int(m.group())
+                print pinnumber
+                response ='%s #gpio%s %s' %(response,pinnumber,driver.readGPIO(port=pinnumber))
+
+            else:
+                response ='%s #%s NULL' %(response,sensor)
        
-       response="%s @%s" %(response,recipient)
-       self.sendDatagram(response)
+        response="%s @%s" %(response,recipient)
+        self.sendDatagram(response)
 
 
     #Handle the GPIO ports by calling the functions in the driver class
     def handlePUTSenze(self,sensors,data,recipient):
-       global device
        response='DATA'
        driver=myDriver()
-       cry=myCrypto(device)
+       cry=myCrypto(self.device)
        for sensor in sensors:
           #If GPIO operation is requested
           if "gpio" in sensor:
@@ -156,17 +155,20 @@ class myHandler(DatagramProtocol):
                  pinnumber=int(m.group())
             
               if pinnumber>0 and pinnumber<=16:
-                 if data[sensor]=="ON": ans=driver.handleON(port=pinnumber)
-                 else: ans=driver.handleOFF(port=pinnumber)
+                 if data[sensor]=="ON":
+                     ans=driver.handleON(port=pinnumber)
+                 else:
+                     ans=driver.handleOFF(port=pinnumber)
                  response='%s #gpio%s %s' %(response,pinnumber,ans)
               else: 
                  response='%s #gpio%d UnKnown' %(response,pinnumber)
+          elif "time" in sensors:
+              print "Received time :",data["time"]
           else:
               response='%s #%s UnKnown' %(response,sensor)
-          
+       print "******",response
        response="%s @%s" %(response,recipient)
-       senze=cry.signSENZE(response)
-       self.transport.write(senze)
+       self.sendDatagram(response)
 
 
     def handleServerResponse(self,senz):
@@ -176,7 +178,7 @@ class myHandler(DatagramProtocol):
  
         if cmd=="DATA":
            if 'msg' in sensors and 'UserRemoved' in data['msg']:
-              cry=myCrypto(device)
+              cry=myCrypto(self.device)
               try:
                  os.remove(cry.pubKeyLoc)
                  os.remove(cry.privKeyLoc)
@@ -193,8 +195,6 @@ class myHandler(DatagramProtocol):
 
 
     def handleDeviceResponse(self,senz):
-        global device
-        global aesKeys
         sender=senz.getSender()
         data=senz.getData()
         sensors=senz.getSensors()
@@ -245,5 +245,3 @@ class myHandler(DatagramProtocol):
            reactor.callLater(1,self.handlePUTSenze,sensors=sensors,data=data,recipient=sender)
         else:
            print "Unknown command"
-
-
