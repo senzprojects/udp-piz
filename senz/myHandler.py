@@ -40,6 +40,8 @@ from myCamDriver import *
 
 from senz import *
 
+buf=''
+aesKeys={}
 
 class myHandler(DatagramProtocol):
   
@@ -94,15 +96,18 @@ class myHandler(DatagramProtocol):
                 response ='%s #tp %s' %(response,driver.readTp())
             #If AES key is requested
             elif "key" == sensor:
-                aeskey=""
-                #Generate AES Key
-                if cry.generateAES(driver.readTime()):
-                    aeskey=cry.key
-                    #Save AES key
-                    aesKeys[recipient]=aeskey
-                    #AES key is encrypted by the recipient public key
-                    rep=myCrypto(recipient)
-                    encKey=rep.encryptRSA(b64encode(aeskey))
+                if recipient not in aesKeys:
+                    aeskey=""
+                    #Generate AES Key
+                    if cry.generateAES(driver.readTime()):
+                        aeskey=cry.key
+                        #Save AES key
+                        aesKeys[recipient]=aeskey
+                else:
+                    aeskey=aesKeys[recipient]
+                #AES key is encrypted by the recipient public key
+                rep=myCrypto(recipient)
+                encKey=rep.encryptRSA(b64encode(aeskey))
                 response ='%s #key %s' %(response,encKey)
 
             #If photo is requested
@@ -110,7 +115,15 @@ class myHandler(DatagramProtocol):
                 cam=myCamDriver()
                 cam.takePhoto()
                 photo=cam.readPhotob64()
-                response ='%s #photo %s' %(response,photo)
+
+                response ='%s #photo ON @%s' %(response,recipient)
+                self.sendDatagram(response)
+                n = 256
+                res=[photo[k:k+n] for k in xrange(0, len(photo),n)]
+                for s in res:
+                    response='DATA #photo %s @%s' %(s,recipient)
+                    self.sendDatagram(response)
+                response ='DATA #photo OFF'
 
             #If time is requested
             elif "time" == sensor:
@@ -199,38 +212,39 @@ class myHandler(DatagramProtocol):
         data=senz.getData()
         sensors=senz.getSensors()
         cmd=senz.getCmd()
- 
+        global buf,aesKeys
         if cmd=="DATA":
-           for sensor in sensors:
-               if sensor in data.keys():
-                  print sensor+"=>"+data[sensor]
+            for sensor in sensors:
+                print sensor+"=>"+data[sensor]
        
-           if 'photo' in sensors:
-               #try:
-                   cam=myCamDriver()
-                   cam.savePhoto(data['photo'],"p1.jpg")
-                   #cam.showPhoto("p1.jpg")
-                   #self.savePhoto(data['photo'],"p1.jpg")
-                   thread.start_new_thread(cam.showPhoto,("p1.jpg",))
-               #except:
-               #    print "Error: unable to show the photo"
-               #cam.savePhoto(data['photo'],"p1.jpg")
+                if sensor=='photo':
+                    if data['photo']=='ON':
+                        buf=''
+                    elif data['photo']=='OFF':
+                        cam=myCamDriver()
+                        cam.savePhoto(buf,"photo.jpg")
+                        #cam.showPhoto("photo.jpg")
+                        thread.start_new_thread(cam.showPhoto,("photo.jpg",))
+                        buf=''
+                    else:
+                        buf="%s%s" %(buf,data['photo'])
 
-           #Received and saved the AES key
-           elif 'key' in sensors and data['key']!="":
-                #Key need to be decrypted by using the private key
-                cry=myCrypto(device)
-                dec=cry.decryptRSA(data['key'])
-                aesKeys[sender]=b64decode(dec)
+                #Received and saved the AES key
+                elif sensor=='key' and data['key']!="":
+                    #Key need to be decrypted by using the private key
+                    cry=myCrypto(self.device)
+                    dec=cry.decryptRSA(data['key'])
+                    aesKeys[sender]=b64decode(dec)
                 
-           #Decrypt and show the gps data
-           elif 'gps' in sensors and data['gps']!="":
-                gpsData=data['gps']
-                if sender in aesKeys:
-                   rep=myCrypto(sender)
-                   rep.key=aesKeys[sender]
-                   gpsData=rep.decrypt(gpsData)
-                print "GPS=>"+gpsData
+                #Decrypt and show the gps data
+                elif sensor=='gps' and data['gps']!="":
+                    gpsData=data['gps']
+                    if sender in aesKeys:
+                        rep=myCrypto(sender)
+                        rep.key=aesKeys[sender]
+                        gpsData=rep.decrypt(gpsData)
+                    print "** GPS=>"+gpsData
+
 
         elif cmd=="SHARE":
            print "This should be implemented"
